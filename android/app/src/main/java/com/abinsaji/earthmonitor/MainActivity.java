@@ -25,12 +25,17 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.SeekBar;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -54,13 +59,21 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(Color.rgb(8,17,31));
         setContentView(root);
 
+        LinearLayout headerRow = new LinearLayout(this);
+        headerRow.setOrientation(LinearLayout.HORIZONTAL);
+        headerRow.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = new TextView(this);
         title.setText("◎  EARTH MONITOR");
         title.setTextColor(Color.rgb(99,230,190));
         title.setTextSize(22);
         title.setGravity(Gravity.CENTER_VERTICAL);
         title.setPadding(0, dp(4), 0, dp(10));
-        root.addView(title);
+        headerRow.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+
+        Button editButton = makeButton("Edit");
+        editButton.setTextColor(Color.rgb(99,230,190));
+        headerRow.addView(editButton, new LinearLayout.LayoutParams(dp(78), dp(40)));
+        root.addView(headerRow);
 
         urlInput = new EditText(this);
         urlInput.setSingleLine(true);
@@ -72,16 +85,25 @@ public class MainActivity extends Activity {
         urlInput.setImeOptions(EditorInfo.IME_ACTION_GO);
         urlInput.setText(prefs.getString("url", DEFAULT_URL));
         root.addView(urlInput, new LinearLayout.LayoutParams(-1, dp(52)));
+        urlInput.setVisibility(View.GONE);
 
         LinearLayout buttons = new LinearLayout(this);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
         Button connect = makeButton("Connect");
         Button refresh = makeButton("Refresh");
         Button stop = makeButton("Stop");
-        buttons.addView(connect, new LinearLayout.LayoutParams(0, dp(46), 1));
-        buttons.addView(refresh, new LinearLayout.LayoutParams(0, dp(46), 1));
-        buttons.addView(stop, new LinearLayout.LayoutParams(0, dp(46), 1));
+        buttons.addView(connect, new LinearLayout.LayoutParams(0, dp(42), 1));
+        buttons.addView(refresh, new LinearLayout.LayoutParams(0, dp(42), 1));
+        buttons.addView(stop, new LinearLayout.LayoutParams(0, dp(42), 1));
         root.addView(buttons);
+        buttons.setVisibility(View.GONE);
+
+        editButton.setOnClickListener(v -> {
+            boolean showEditor = urlInput.getVisibility() != View.VISIBLE;
+            urlInput.setVisibility(showEditor ? View.VISIBLE : View.GONE);
+            buttons.setVisibility(showEditor ? View.VISIBLE : View.GONE);
+            editButton.setText(showEditor ? "Done" : "Edit");
+        });
 
         LinearLayout captureRow = new LinearLayout(this);
         captureRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -97,6 +119,57 @@ public class MainActivity extends Activity {
         status.setTextSize(12);
         status.setPadding(0, dp(8), 0, dp(8));
         root.addView(status);
+
+        LinearLayout ledPanel = new LinearLayout(this);
+        ledPanel.setOrientation(LinearLayout.VERTICAL);
+        ledPanel.setPadding(0, dp(2), 0, dp(2));
+
+        LinearLayout ledHeader = new LinearLayout(this);
+        ledHeader.setOrientation(LinearLayout.HORIZONTAL);
+        ledHeader.setGravity(Gravity.CENTER_VERTICAL);
+        TextView ledTitle = new TextView(this);
+        ledTitle.setText("Camera LED");
+        ledTitle.setTextColor(Color.WHITE);
+        ledTitle.setTextSize(14);
+        ledHeader.addView(ledTitle, new LinearLayout.LayoutParams(0, dp(36), 1));
+
+        Switch ledSwitch = new Switch(this);
+        ledSwitch.setTextOn("On");
+        ledSwitch.setTextOff("Off");
+        ledSwitch.setTextColor(Color.rgb(154,171,194));
+        ledSwitch.setChecked(false);
+        ledHeader.addView(ledSwitch, new LinearLayout.LayoutParams(-2, dp(40)));
+        ledPanel.addView(ledHeader);
+
+        TextView brightnessLabel = new TextView(this);
+        brightnessLabel.setText("Brightness: 128 / 255");
+        brightnessLabel.setTextColor(Color.rgb(154,171,194));
+        brightnessLabel.setTextSize(12);
+        ledPanel.addView(brightnessLabel);
+
+        SeekBar brightnessSeek = new SeekBar(this);
+        brightnessSeek.setMax(255);
+        brightnessSeek.setProgress(128);
+        if (Build.VERSION.SDK_INT >= 21) {
+            brightnessSeek.setProgressTintList(android.content.res.ColorStateList.valueOf(Color.rgb(99,230,190)));
+            brightnessSeek.setThumbTintList(android.content.res.ColorStateList.valueOf(Color.rgb(99,230,190)));
+        }
+        ledPanel.addView(brightnessSeek, new LinearLayout.LayoutParams(-1, dp(34)));
+        root.addView(ledPanel);
+
+        ledSwitch.setOnCheckedChangeListener((button, enabled) -> {
+            ledSwitch.setText(enabled ? "On" : "Off");
+            setLedIntensity(enabled ? Math.max(1, brightnessSeek.getProgress()) : 0);
+        });
+        brightnessSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                brightnessLabel.setText("Brightness: " + progress + " / 255");
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                if (ledSwitch.isChecked()) setLedIntensity(Math.max(1, seekBar.getProgress()));
+            }
+        });
 
         webView = new WebView(this);
         webView.setBackgroundColor(Color.BLACK);
@@ -150,6 +223,72 @@ public class MainActivity extends Activity {
         }
         prefs.edit().putString("url", url).apply();
         webView.loadUrl(url);
+    }
+
+    /*
+     * Controls the built-in flash LED used by the standard ESP32-CAM
+     * CameraWebServer firmware. The stream is commonly hosted on port 81,
+     * while camera controls are handled by port 80.
+     */
+    private void setLedIntensity(int intensity) {
+        final String controlUrl;
+        try {
+            Uri streamUri = Uri.parse(urlInput.getText().toString().trim());
+            String scheme = streamUri.getScheme();
+            String host = streamUri.getHost();
+            if (scheme == null || host == null) throw new IllegalArgumentException("Invalid camera URL");
+            int streamPort = streamUri.getPort();
+            int controlPort = (streamPort == 81 || streamPort == -1)
+                    ? ("https".equalsIgnoreCase(scheme) ? 443 : 80) : streamPort;
+            String authorityHost = host.contains(":") && !host.startsWith("[") ? "[" + host + "]" : host;
+            controlUrl = new Uri.Builder()
+                    .scheme(scheme)
+                    .encodedAuthority(authorityHost + ":" + controlPort)
+                    .appendPath("control")
+                    .appendQueryParameter("var", "led_intensity")
+                    .appendQueryParameter("val", String.valueOf(intensity))
+                    .build().toString();
+        } catch (Exception e) {
+            Toast.makeText(this, "Open Edit and enter the camera stream URL first", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        new Thread(() -> {
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(controlUrl).openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(3000);
+                connection.setReadTimeout(3000);
+                connection.setUseCaches(false);
+                int responseCode = connection.getResponseCode();
+                InputStream response = responseCode >= 200 && responseCode < 400
+                        ? connection.getInputStream() : connection.getErrorStream();
+                if (response != null) {
+                    byte[] buffer = new byte[512];
+                    while (response.read(buffer) != -1) { /* drain response */ }
+                    response.close();
+                }
+                final boolean success = responseCode >= 200 && responseCode < 300;
+                runOnUiThread(() -> {
+                    if (success) {
+                        status.setText(intensity == 0
+                                ? "Camera LED off"
+                                : "Camera LED on · brightness " + intensity + "/255");
+                    } else {
+                        status.setText("LED control rejected · check camera firmware");
+                        Toast.makeText(this, "Camera did not accept LED control. Firmware must support led_intensity.", Toast.LENGTH_LONG).show();
+                    }
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    status.setText("LED control failed · check camera Wi-Fi/firmware");
+                    Toast.makeText(this, "Could not control LED. The camera must support /control?var=led_intensity.", Toast.LENGTH_LONG).show();
+                });
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        }).start();
     }
 
     private void captureAndSaveImage() {
