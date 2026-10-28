@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#08111f">
+  <title>Earth Monitor · Camera View</title>
+  <style>
+    :root { color-scheme: dark; --bg:#08111f; --panel:#101c2d; --line:#26364d; --text:#edf4ff; --muted:#9aabc2; --accent:#63e6be; --blue:#7ab7ff; --danger:#ff9d9d; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:radial-gradient(900px 500px at 50% -10%,#183553 0%,var(--bg) 65%); color:var(--text); }
+    .wrap { width:min(1100px,100% - 32px); margin:0 auto; padding:28px 0 42px; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:24px; }
+    .brand { display:flex; gap:12px; align-items:center; }
+    .logo { display:grid; place-items:center; width:44px; height:44px; border-radius:14px; background:linear-gradient(145deg,#63e6be,#3e9fd5); color:#07131c; font-size:22px; font-weight:900; }
+    h1 { font-size:clamp(22px,4vw,30px); margin:0; letter-spacing:-.04em; }
+    .subtitle { color:var(--muted); margin-top:4px; font-size:13px; }
+    .badge { border:1px solid var(--line); border-radius:999px; padding:8px 11px; color:var(--muted); font-size:12px; white-space:nowrap; }
+    .layout { display:grid; grid-template-columns:minmax(0,1.7fr) minmax(280px,1fr); gap:18px; align-items:start; }
+    .panel { background:rgba(16,28,45,.88); border:1px solid var(--line); border-radius:20px; overflow:hidden; box-shadow:0 16px 50px #0002; }
+    .panel-head { padding:17px 19px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    h2 { margin:0; font-size:15px; letter-spacing:.01em; }
+    .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#76859a; margin-right:7px; vertical-align:middle; }
+    .viewer { min-height:250px; aspect-ratio:4/3; background:#030811; display:grid; place-items:center; position:relative; }
+    #stream { width:100%; height:100%; object-fit:contain; display:block; }
+    .placeholder { padding:26px; text-align:center; max-width:360px; color:var(--muted); line-height:1.55; }
+    .placeholder strong { color:var(--text); display:block; font-size:16px; margin-bottom:8px; }
+    .viewer-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:13px 17px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; }
+    .controls { padding:18px; }
+    label { display:block; color:#cbd8e9; font-size:13px; margin:0 0 8px; }
+    input { width:100%; min-width:0; background:#081321; border:1px solid #34445b; color:var(--text); border-radius:11px; padding:12px 13px; outline:none; font:inherit; font-size:14px; }
+    input:focus { border-color:var(--blue); box-shadow:0 0 0 3px #7ab7ff20; }
+    .hint { color:var(--muted); font-size:12px; line-height:1.5; margin:8px 0 17px; overflow-wrap:anywhere; }
+    .buttons { display:flex; flex-wrap:wrap; gap:9px; }
+    button { border:1px solid var(--line); background:#1a2a40; color:var(--text); border-radius:11px; padding:10px 13px; font:inherit; font-size:13px; font-weight:650; cursor:pointer; transition:transform .12s,background .12s; }
+    button:hover { background:#243951; } button:active { transform:scale(.98); }
+    button.primary { background:var(--accent); border-color:var(--accent); color:#062019; }
+    button.primary:hover { background:#88f3d2; }
+    button.ghost { background:transparent; }
+    .note { margin-top:16px; border:1px solid #29463f; background:#102a29aa; padding:12px; border-radius:12px; color:#bbdfd6; font-size:12px; line-height:1.55; }
+    .help { padding:17px 19px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; line-height:1.65; }
+    .help strong { color:var(--text); }
+    .status-text { color:var(--muted); }
+    .status-text.error { color:var(--danger); }
+    .status-text.ok { color:var(--accent); }
+    footer { color:#71849d; font-size:12px; text-align:center; margin-top:24px; }
+    @media (max-width:780px) { .layout { grid-template-columns:1fr; } .viewer { min-height:220px; } header { align-items:flex-start; } .badge { display:none; } }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <div class="brand">
+        <div class="logo" aria-hidden="true">◎</div>
+        <div><h1>Earth Monitor</h1><div class="subtitle">Live camera view · Local network</div></div>
+      </div>
+      <div class="badge">ESP32-CAM STREAM VIEWER</div>
+    </header>
+
+    <div class="layout">
+      <section class="panel" aria-label="Camera preview">
+        <div class="panel-head">
+          <h2><span class="dot" id="statusDot"></span>Camera preview</h2>
+          <span class="status-text" id="status" role="status" aria-live="polite">Not connected</span>
+        </div>
+        <div class="viewer">
+          <img id="stream" alt="Live ESP32 camera stream" hidden>
+          <div class="placeholder" id="placeholder">
+            <strong>Ready to connect</strong>
+            Enter your ESP32 stream address and select Connect. Your phone or computer must be on the same Wi-Fi network as the camera.
+          </div>
+        </div>
+        <div class="viewer-footer">
+          <span id="endpointLabel">No stream loaded</span>
+          <span id="lastAction">Waiting</span>
+        </div>
+      </section>
+
+      <section class="panel" aria-label="Stream settings">
+        <div class="panel-head"><h2>Connection settings</h2></div>
+        <div class="controls">
+          <label for="streamUrl">Camera stream URL</label>
+          <input id="streamUrl" type="url" inputmode="url" autocomplete="url" spellcheck="false" value="http://192.168.1.25:81/stream" placeholder="http://192.168.1.25:81/stream">
+          <div class="hint">Default: <code>http://192.168.1.25:81/stream</code><br>Use the address shown by your ESP32-CAM serial monitor or router.</div>
+          <div class="buttons">
+            <button class="primary" id="connectBtn" type="button">Connect</button>
+            <button id="refreshBtn" type="button">Refresh stream</button>
+            <button class="ghost" id="stopBtn" type="button">Stop</button>
+          </div>
+          <div class="note">Your URL is saved in this browser on this device. If the stream does not appear, check that the camera is running and the device is on the same network. Some browsers block insecure HTTP streams when this page is hosted over HTTPS.</div>
+        </div>
+        <div class="help">
+          <strong>Quick troubleshooting</strong><br>
+          • Open the stream URL directly in a browser on the same network.<br>
+          • Confirm the ESP32-CAM stream port is <code>81</code> and the path is <code>/stream</code>.<br>
+          • If the IP changes, edit the URL here and press <strong>Connect</strong>.
+        </div>
+      </section>
+    </div>
+    <footer>Earth Monitor · Camera viewer · Runs locally in your browser</footer>
+  </main>
+  <script>
+    (() => {
+      const DEFAULT_URL = 'http://192.168.1.25:81/stream';
+      const urlInput = document.getElementById('streamUrl');
+      const image = document.getElementById('stream');
+      const placeholder = document.getElementById('placeholder');
+      const status = document.getElementById('status');
+      const dot = document.getElementById('statusDot');
+      const endpointLabel = document.getElementById('endpointLabel');
+      const lastAction = document.getElementById('lastAction');
+      let reconnectTimer = null;
+
+      try { urlInput.value = localStorage.getItem('earthMonitorStreamUrl') || DEFAULT_URL; } catch (_) {}
+
+      function setStatus(message, kind = '') {
+        status.textContent = message;
+        status.className = 'status-text' + (kind ? ' ' + kind : '');
+        dot.style.background = kind === 'ok' ? '#63e6be' : kind === 'error' ? '#ff7777' : '#76859a';
+      }
+      function normalizedUrl() {
+        const raw = urlInput.value.trim();
+        if (!raw) throw new Error('Enter a camera stream URL.');
+        let url;
+        try { url = new URL(raw); } catch (_) { throw new Error('Enter a valid URL, including http:// or https://.'); }
+        if (!['http:', 'https:'].includes(url.protocol)) throw new Error('The stream URL must start with http:// or https://.');
+        return url.href;
+      }
+      function connect(cacheBust = true) {
+        let url;
+        try { url = normalizedUrl(); } catch (error) { setStatus(error.message, 'error'); return; }
+        try { localStorage.setItem('earthMonitorStreamUrl', urlInput.value.trim()); } catch (_) {}
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        setStatus('Connecting…');
+        placeholder.hidden = true;
+        image.hidden = false;
+        lastAction.textContent = 'Request sent';
+        endpointLabel.textContent = url;
+        // Avoid reusing cached MJPEG requests when reconnecting.
+        image.src = url + (cacheBust ? (url.includes('?') ? '&' : '?') + '_t=' + Date.now() : '');
+      }
+      image.addEventListener('load', () => { setStatus('Stream responding', 'ok'); lastAction.textContent = 'Image received'; });
+      image.addEventListener('error', () => {
+        setStatus('Stream unavailable', 'error');
+        lastAction.textContent = 'Check URL / Wi-Fi';
+        placeholder.hidden = false;
+        placeholder.innerHTML = '<strong>Could not load the stream</strong>Check the IP address, port, camera power, and Wi-Fi connection. Then press Connect to try again.';
+      });
+      document.getElementById('connectBtn').addEventListener('click', () => connect());
+      document.getElementById('refreshBtn').addEventListener('click', () => connect());
+      document.getElementById('stopBtn').addEventListener('click', () => {
+        image.removeAttribute('src');
+        image.hidden = true;
+        placeholder.hidden = false;
+        placeholder.innerHTML = '<strong>Stream stopped</strong>Press Connect when you are ready to view the camera again.';
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        setStatus('Stopped');
+        lastAction.textContent = 'Stopped by user';
+      });
+      urlInput.addEventListener('keydown', event => { if (event.key === 'Enter') connect(); });
+      urlInput.addEventListener('change', () => {
+        try { localStorage.setItem('earthMonitorStreamUrl', urlInput.value.trim()); } catch (_) {}
+      });
+    })();
+  </script>
+</body>
+</html>
