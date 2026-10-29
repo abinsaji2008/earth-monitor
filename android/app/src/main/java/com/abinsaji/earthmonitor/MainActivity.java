@@ -222,7 +222,15 @@ public class MainActivity extends Activity {
             return;
         }
         prefs.edit().putString("url", url).apply();
-        webView.loadUrl(url);
+
+        // Render the MJPEG stream inside a responsive image element so it
+        // uses the full available preview width without vertical distortion.
+        String html = "<!doctype html><html><head><meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1'></head>" +
+                "<body style='margin:0;padding:0;background:#000;overflow:hidden;'>" +
+                "<img src='" + url.replace("&", "&amp;").replace("'", "&#39;") +
+                "' style='display:block;width:100%;height:auto;margin:0;padding:0;border:0;' />" +
+                "</body></html>";
+        webView.loadDataWithBaseURL(url, html, "text/html", "UTF-8", null);
     }
 
     /*
