@@ -2,8 +2,6 @@ package com.abinsaji.earthmonitor;
 
 import android.Manifest;
 import android.app.Activity;
-import android.os.Build;
-import android.os.Bundle;
 import android.content.ContentValues;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -11,165 +9,159 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
-import android.graphics.Rect;
 import android.net.Uri;
+import android.net.wifi.WifiManager;
+import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
 import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
-import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.SeekBar;
-import android.widget.Switch;
+import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONObject;
+
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.OutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.Inet4Address;
+import java.net.Socket;
 import java.net.URL;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
-    private static final String DEFAULT_URL = "http://192.168.1.25:81/stream";
+    private static final String DEFAULT_IP = "192.168.1.25";
+    private static final String STREAM_PATH = ":81/stream";
     private static final int REQUEST_WRITE_STORAGE = 204;
-    private EditText urlInput;
+
+    private EditText ipInput;
     private WebView webView;
     private TextView status;
+    private TextView distanceValue;
+    private TextView scanStatus;
+    private Spinner deviceSpinner;
+    private ArrayAdapter<String> deviceAdapter;
     private SharedPreferences prefs;
+    private String selectedIp = DEFAULT_IP;
+    private ScheduledExecutorService distanceScheduler;
+    private ExecutorService scanExecutor;
+    private volatile boolean scanning = false;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         getWindow().setStatusBarColor(Color.rgb(8,17,31));
         getWindow().setNavigationBarColor(Color.rgb(8,17,31));
         prefs = getSharedPreferences("earth_monitor", MODE_PRIVATE);
+        selectedIp = prefs.getString("ip", DEFAULT_IP);
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(14), dp(12), dp(14), dp(8));
+        root.setPadding(dp(14), dp(10), dp(14), dp(8));
         root.setBackgroundColor(Color.rgb(8,17,31));
         setContentView(root);
 
-        LinearLayout headerRow = new LinearLayout(this);
-        headerRow.setOrientation(LinearLayout.HORIZONTAL);
-        headerRow.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = new TextView(this);
         title.setText("◎  EARTH MONITOR");
         title.setTextColor(Color.rgb(99,230,190));
         title.setTextSize(22);
         title.setGravity(Gravity.CENTER_VERTICAL);
-        title.setPadding(0, dp(4), 0, dp(10));
-        headerRow.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        title.setPadding(0, dp(4), 0, dp(12));
+        root.addView(title);
 
-        Button editButton = makeButton("Edit");
-        editButton.setTextColor(Color.rgb(99,230,190));
-        headerRow.addView(editButton, new LinearLayout.LayoutParams(dp(78), dp(40)));
-        root.addView(headerRow);
+        ScrollView controlsScroll = new ScrollView(this);
+        controlsScroll.setFillViewport(false);
+        LinearLayout controls = new LinearLayout(this);
+        controls.setOrientation(LinearLayout.VERTICAL);
+        controlsScroll.addView(controls);
+        root.addView(controlsScroll, new LinearLayout.LayoutParams(-1, -2));
 
-        urlInput = new EditText(this);
-        urlInput.setSingleLine(true);
-        urlInput.setTextSize(14);
-        urlInput.setTextColor(Color.WHITE);
-        urlInput.setHintTextColor(Color.LTGRAY);
-        urlInput.setHint(DEFAULT_URL);
-        urlInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
-        urlInput.setImeOptions(EditorInfo.IME_ACTION_GO);
-        urlInput.setText(prefs.getString("url", DEFAULT_URL));
-        root.addView(urlInput, new LinearLayout.LayoutParams(-1, dp(52)));
-        urlInput.setVisibility(View.GONE);
+        TextView connectionTitle = sectionTitle("ESP32 CONNECTION");
+        controls.addView(connectionTitle);
 
-        LinearLayout buttons = new LinearLayout(this);
-        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        ipInput = new EditText(this);
+        ipInput.setSingleLine(true);
+        ipInput.setTextSize(15);
+        ipInput.setTextColor(Color.WHITE);
+        ipInput.setHintTextColor(Color.LTGRAY);
+        ipInput.setHint("Enter ESP32 IP address (e.g. 192.168.1.25)");
+        ipInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        ipInput.setImeOptions(EditorInfo.IME_ACTION_GO);
+        ipInput.setText(selectedIp);
+        controls.addView(ipInput, new LinearLayout.LayoutParams(-1, dp(50)));
+
+        LinearLayout connectionButtons = new LinearLayout(this);
+        connectionButtons.setOrientation(LinearLayout.HORIZONTAL);
         Button connect = makeButton("Connect");
-        Button refresh = makeButton("Refresh");
-        Button stop = makeButton("Stop");
-        buttons.addView(connect, new LinearLayout.LayoutParams(0, dp(42), 1));
-        buttons.addView(refresh, new LinearLayout.LayoutParams(0, dp(42), 1));
-        buttons.addView(stop, new LinearLayout.LayoutParams(0, dp(42), 1));
-        root.addView(buttons);
-        buttons.setVisibility(View.GONE);
+        Button scan = makeButton("Scan Local Network");
+        connectionButtons.addView(connect, new LinearLayout.LayoutParams(0, dp(44), 1));
+        connectionButtons.addView(scan, new LinearLayout.LayoutParams(0, dp(44), 1));
+        controls.addView(connectionButtons);
 
-        editButton.setOnClickListener(v -> {
-            boolean showEditor = urlInput.getVisibility() != View.VISIBLE;
-            urlInput.setVisibility(showEditor ? View.VISIBLE : View.GONE);
-            buttons.setVisibility(showEditor ? View.VISIBLE : View.GONE);
-            editButton.setText(showEditor ? "Done" : "Edit");
-        });
+        scanStatus = smallText("Scan finds reachable devices on your current Wi-Fi network.");
+        controls.addView(scanStatus);
 
-        LinearLayout captureRow = new LinearLayout(this);
-        captureRow.setOrientation(LinearLayout.HORIZONTAL);
-        Button saveImage = makeButton("Save Image");
+        deviceSpinner = new Spinner(this);
+        deviceAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<>());
+        deviceAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        deviceSpinner.setAdapter(deviceAdapter);
+        controls.addView(deviceSpinner, new LinearLayout.LayoutParams(-1, dp(44)));
+        deviceSpinner.setVisibility(View.GONE);
+
+        Button useSelected = makeButton("Use Selected IP");
+        controls.addView(useSelected, new LinearLayout.LayoutParams(-1, dp(42)));
+        useSelected.setVisibility(View.GONE);
+
+        TextView distanceTitle = sectionTitle("ULTRASONIC DISTANCE");
+        controls.addView(distanceTitle);
+        LinearLayout distanceCard = new LinearLayout(this);
+        distanceCard.setOrientation(LinearLayout.VERTICAL);
+        distanceCard.setPadding(dp(16), dp(12), dp(16), dp(12));
+        distanceCard.setBackgroundColor(Color.rgb(16,35,48));
+        TextView distanceCaption = smallText("Measured distance to the object in front of the ultrasonic sensor");
+        distanceCard.addView(distanceCaption);
+        distanceValue = new TextView(this);
+        distanceValue.setText("-- cm");
+        distanceValue.setTextColor(Color.rgb(99,230,190));
+        distanceValue.setTextSize(34);
+        distanceValue.setGravity(Gravity.CENTER);
+        distanceValue.setPadding(0, dp(6), 0, dp(4));
+        distanceCard.addView(distanceValue);
+        controls.addView(distanceCard, new LinearLayout.LayoutParams(-1, -2));
+
+        status = smallText("Ready · Connect your phone and ESP32 to the same Wi-Fi.");
+        status.setPadding(0, dp(10), 0, dp(8));
+        controls.addView(status);
+
+        Button saveImage = makeButton("Save Camera Image");
         saveImage.setTextColor(Color.rgb(8,17,31));
         saveImage.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(99,230,190)));
-        captureRow.addView(saveImage, new LinearLayout.LayoutParams(-1, dp(46)));
-        root.addView(captureRow);
+        controls.addView(saveImage, new LinearLayout.LayoutParams(-1, dp(44)));
 
-        status = new TextView(this);
-        status.setTextColor(Color.rgb(154,171,194));
-        status.setText("Ready · Same Wi-Fi as camera required");
-        status.setTextSize(12);
-        status.setPadding(0, dp(8), 0, dp(8));
-        root.addView(status);
-
-        LinearLayout ledPanel = new LinearLayout(this);
-        ledPanel.setOrientation(LinearLayout.VERTICAL);
-        ledPanel.setPadding(0, dp(2), 0, dp(2));
-
-        LinearLayout ledHeader = new LinearLayout(this);
-        ledHeader.setOrientation(LinearLayout.HORIZONTAL);
-        ledHeader.setGravity(Gravity.CENTER_VERTICAL);
-        TextView ledTitle = new TextView(this);
-        ledTitle.setText("Camera LED");
-        ledTitle.setTextColor(Color.WHITE);
-        ledTitle.setTextSize(14);
-        ledHeader.addView(ledTitle, new LinearLayout.LayoutParams(0, dp(36), 1));
-
-        Switch ledSwitch = new Switch(this);
-        ledSwitch.setTextOn("On");
-        ledSwitch.setTextOff("Off");
-        ledSwitch.setTextColor(Color.rgb(154,171,194));
-        ledSwitch.setChecked(false);
-        ledHeader.addView(ledSwitch, new LinearLayout.LayoutParams(-2, dp(40)));
-        ledPanel.addView(ledHeader);
-
-        TextView brightnessLabel = new TextView(this);
-        brightnessLabel.setText("Brightness: 128 / 255");
-        brightnessLabel.setTextColor(Color.rgb(154,171,194));
-        brightnessLabel.setTextSize(12);
-        ledPanel.addView(brightnessLabel);
-
-        SeekBar brightnessSeek = new SeekBar(this);
-        brightnessSeek.setMax(255);
-        brightnessSeek.setProgress(128);
-        if (Build.VERSION.SDK_INT >= 21) {
-            brightnessSeek.setProgressTintList(android.content.res.ColorStateList.valueOf(Color.rgb(99,230,190)));
-            brightnessSeek.setThumbTintList(android.content.res.ColorStateList.valueOf(Color.rgb(99,230,190)));
-        }
-        ledPanel.addView(brightnessSeek, new LinearLayout.LayoutParams(-1, dp(34)));
-        root.addView(ledPanel);
-
-        ledSwitch.setOnCheckedChangeListener((button, enabled) -> {
-            ledSwitch.setText(enabled ? "On" : "Off");
-            setLedIntensity(enabled ? Math.max(1, brightnessSeek.getProgress()) : 0);
-        });
-        brightnessSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                brightnessLabel.setText("Brightness: " + progress + " / 255");
-            }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {
-                if (ledSwitch.isChecked()) setLedIntensity(Math.max(1, seekBar.getProgress()));
-            }
-        });
+        TextView cameraTitle = sectionTitle("LIVE CAMERA");
+        controls.addView(cameraTitle);
 
         webView = new WebView(this);
         webView.setBackgroundColor(Color.BLACK);
@@ -182,121 +174,201 @@ public class MainActivity extends Activity {
                 status.setText("Connecting to camera…");
             }
             @Override public void onPageFinished(WebView view, String url) {
-                status.setText("Stream page loaded");
+                status.setText("Camera stream loaded · Reading distance…");
             }
             @Override public void onReceivedError(WebView view, android.webkit.WebResourceRequest request, android.webkit.WebResourceError error) {
-                if (request.isForMainFrame()) status.setText("Could not load stream · Check URL and Wi-Fi");
+                if (request.isForMainFrame()) status.setText("Camera stream unavailable · Check IP and Wi-Fi");
             }
         });
-        webView.setWebChromeClient(new WebChromeClient());
         root.addView(webView, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        connect.setOnClickListener(v -> loadStream());
-        refresh.setOnClickListener(v -> loadStream());
-        stop.setOnClickListener(v -> {
-            webView.stopLoading();
-            webView.loadUrl("about:blank");
-            status.setText("Stream stopped");
+        connect.setOnClickListener(v -> connectToDevice());
+        ipInput.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
+                connectToDevice(); return true;
+            }
+            return false;
+        });
+        scan.setOnClickListener(v -> scanLocalNetwork());
+        useSelected.setOnClickListener(v -> {
+            Object item = deviceSpinner.getSelectedItem();
+            if (item != null) {
+                String value = item.toString();
+                Matcher matcher = Pattern.compile("(\\d{1,3}(?:\\.\\d{1,3}){3})").matcher(value);
+                if (matcher.find()) {
+                    ipInput.setText(matcher.group(1));
+                    connectToDevice();
+                }
+            }
         });
         saveImage.setOnClickListener(v -> {
-            if (Build.VERSION.SDK_INT <= 28 &&
+            if (android.os.Build.VERSION.SDK_INT <= 28 &&
                     checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_WRITE_STORAGE);
             } else {
                 captureAndSaveImage();
             }
         });
-        urlInput.setOnEditorActionListener((v, actionId, event) -> {
-            if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
-                loadStream(); return true;
-            }
-            return false;
-        });
-        loadStream();
+
+        connectToDevice();
     }
 
-    private void loadStream() {
-        String url = urlInput.getText().toString().trim();
-        if (!(url.startsWith("http://") || url.startsWith("https://"))) {
-            status.setText("Enter a valid http:// or https:// URL");
+    private void connectToDevice() {
+        String ip = ipInput.getText().toString().trim();
+        if (!isValidIpv4(ip)) {
+            status.setText("Enter a valid IPv4 address.");
             return;
         }
-        prefs.edit().putString("url", url).apply();
-
-        // Render the MJPEG stream inside a responsive image element so it
-        // uses the full available preview width without vertical distortion.
-        String html = "<!doctype html><html><head><meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1'></head>" +
-                "<body style='margin:0;padding:0;background:#000;overflow:hidden;'>" +
-                "<img src='" + url.replace("&", "&amp;").replace("'", "&#39;") +
-                "' style='display:block;width:100%;height:auto;margin:0;padding:0;border:0;' />" +
-                "</body></html>";
-        webView.loadDataWithBaseURL(url, html, "text/html", "UTF-8", null);
+        selectedIp = ip;
+        prefs.edit().putString("ip", ip).apply();
+        String streamUrl = "http://" + ip + STREAM_PATH;
+        webView.loadDataWithBaseURL(streamUrl,
+                "<!doctype html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'></head>" +
+                "<body style='margin:0;background:#000;overflow:hidden'><img src='" + streamUrl +
+                "' style='display:block;width:100%;height:auto' /></body></html>",
+                "text/html", "UTF-8", null);
+        startDistancePolling(ip);
     }
 
-    /*
-     * Controls the built-in flash LED used by the standard ESP32-CAM
-     * CameraWebServer firmware. The stream is commonly hosted on port 81,
-     * while camera controls are handled by port 80.
-     */
-    private void setLedIntensity(int intensity) {
-        final String controlUrl;
-        try {
-            Uri streamUri = Uri.parse(urlInput.getText().toString().trim());
-            String scheme = streamUri.getScheme();
-            String host = streamUri.getHost();
-            if (scheme == null || host == null) throw new IllegalArgumentException("Invalid camera URL");
-            int streamPort = streamUri.getPort();
-            int controlPort = (streamPort == 81 || streamPort == -1)
-                    ? ("https".equalsIgnoreCase(scheme) ? 443 : 80) : streamPort;
-            String authorityHost = host.contains(":") && !host.startsWith("[") ? "[" + host + "]" : host;
-            controlUrl = new Uri.Builder()
-                    .scheme(scheme)
-                    .encodedAuthority(authorityHost + ":" + controlPort)
-                    .appendPath("control")
-                    .appendQueryParameter("var", "led_intensity")
-                    .appendQueryParameter("val", String.valueOf(intensity))
-                    .build().toString();
-        } catch (Exception e) {
-            Toast.makeText(this, "Open Edit and enter the camera stream URL first", Toast.LENGTH_LONG).show();
-            return;
-        }
-
-        new Thread(() -> {
+    private void startDistancePolling(String ip) {
+        if (distanceScheduler != null) distanceScheduler.shutdownNow();
+        distanceScheduler = Executors.newSingleThreadScheduledExecutor();
+        distanceValue.setText("Loading…");
+        distanceScheduler.scheduleWithFixedDelay(() -> {
             HttpURLConnection connection = null;
             try {
-                connection = (HttpURLConnection) new URL(controlUrl).openConnection();
-                connection.setRequestMethod("GET");
-                connection.setConnectTimeout(3000);
-                connection.setReadTimeout(3000);
+                URL url = new URL("http://" + ip + "/distance");
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setConnectTimeout(2500);
+                connection.setReadTimeout(2500);
                 connection.setUseCaches(false);
-                int responseCode = connection.getResponseCode();
-                InputStream response = responseCode >= 200 && responseCode < 400
-                        ? connection.getInputStream() : connection.getErrorStream();
-                if (response != null) {
-                    byte[] buffer = new byte[512];
-                    while (response.read(buffer) != -1) { /* drain response */ }
-                    response.close();
+                int code = connection.getResponseCode();
+                if (code < 200 || code >= 300) throw new Exception("HTTP " + code);
+                InputStream input = connection.getInputStream();
+                byte[] data = new byte[2048];
+                StringBuilder body = new StringBuilder();
+                int count;
+                while ((count = input.read(data)) != -1 && body.length() < 8192) {
+                    body.append(new String(data, 0, count, java.nio.charset.StandardCharsets.UTF_8));
                 }
-                final boolean success = responseCode >= 200 && responseCode < 300;
+                input.close();
+                String cm = parseDistance(body.toString());
                 runOnUiThread(() -> {
-                    if (success) {
-                        status.setText(intensity == 0
-                                ? "Camera LED off"
-                                : "Camera LED on · brightness " + intensity + "/255");
-                    } else {
-                        status.setText("LED control rejected · check camera firmware");
-                        Toast.makeText(this, "Camera did not accept LED control. Firmware must support led_intensity.", Toast.LENGTH_LONG).show();
-                    }
+                    distanceValue.setText(cm == null ? "No distance data" : cm + " cm");
+                    if (cm == null) status.setText("Connected, but /distance returned an unrecognised value.");
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> {
-                    status.setText("LED control failed · check camera Wi-Fi/firmware");
-                    Toast.makeText(this, "Could not control LED. The camera must support /control?var=led_intensity.", Toast.LENGTH_LONG).show();
+                    distanceValue.setText("-- cm");
+                    status.setText("Distance endpoint unavailable · Expected http://" + ip + "/distance");
                 });
             } finally {
                 if (connection != null) connection.disconnect();
             }
+        }, 0, 2, TimeUnit.SECONDS);
+    }
+
+    private String parseDistance(String response) {
+        String value = response.trim();
+        try {
+            JSONObject json = new JSONObject(value);
+            String[] keys = {"distance_cm", "distance", "cm", "ultrasonic"};
+            for (String key : keys) {
+                if (json.has(key) && !json.isNull(key)) return String.format(Locale.US, "%.1f", json.getDouble(key));
+            }
+        } catch (Exception ignored) {}
+        Matcher matcher = Pattern.compile("-?\\d+(?:\\.\\d+)?").matcher(value);
+        if (matcher.find()) {
+            try { return String.format(Locale.US, "%.1f", Double.parseDouble(matcher.group())); }
+            catch (Exception ignored) {}
+        }
+        return null;
+    }
+
+    private void scanLocalNetwork() {
+        if (scanning) return;
+        WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+        if (wifi == null || !wifi.isWifiEnabled()) {
+            scanStatus.setText("Turn on Wi-Fi and connect to your local network first.");
+            return;
+        }
+        int ipInt = wifi.getDhcpInfo().ipAddress;
+        int mask = wifi.getDhcpInfo().netmask;
+        if (ipInt == 0) {
+            scanStatus.setText("Could not read Wi-Fi network details. Check Wi-Fi connection.");
+            return;
+        }
+        int network = ipInt & mask;
+        int broadcast = network | ~mask;
+        int first = network + 1;
+        int last = broadcast - 1;
+        if (last - first > 1022) {
+            scanStatus.setText("Network is too large to scan safely (more than 1024 addresses).");
+            return;
+        }
+        scanning = true;
+        scanStatus.setText("Scanning local network… This may take a few seconds.");
+        scan.setEnabled(false);
+        if (scanExecutor != null) scanExecutor.shutdownNow();
+        scanExecutor = Executors.newFixedThreadPool(32);
+        List<String> found = java.util.Collections.synchronizedList(new ArrayList<>());
+        java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(Math.max(0, last - first + 1));
+        for (int candidate = first; candidate <= last; candidate++) {
+            final int address = candidate;
+            scanExecutor.execute(() -> {
+                try {
+                    String host = intToIp(address);
+                    if (host.equals(intToIp(ipInt))) return;
+                    int openPort = findOpenHttpPort(host);
+                    if (openPort > 0) found.add(host + "  (HTTP " + openPort + ")");
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+        new Thread(() -> {
+            try { latch.await(25, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+            scanExecutor.shutdownNow();
+            runOnUiThread(() -> {
+                scanning = false;
+                scan.setEnabled(true);
+                deviceAdapter.clear();
+                deviceAdapter.addAll(found);
+                deviceAdapter.notifyDataSetChanged();
+                boolean hasResults = !found.isEmpty();
+                deviceSpinner.setVisibility(hasResults ? View.VISIBLE : View.GONE);
+                useSelected.setVisibility(hasResults ? View.VISIBLE : View.GONE);
+                scanStatus.setText(hasResults
+                        ? "Found " + found.size() + " device(s) with an HTTP service. Select one below."
+                        : "No HTTP devices found. You can still enter the ESP32 IP manually.");
+            });
         }).start();
+    }
+
+    private int findOpenHttpPort(String host) {
+        int[] ports = {81, 80, 8080, 443};
+        for (int port : ports) {
+            try (Socket socket = new Socket()) {
+                socket.connect(new java.net.InetSocketAddress(host, port), 350);
+                return port;
+            } catch (Exception ignored) {}
+        }
+        return -1;
+    }
+
+    private String intToIp(int value) {
+        return (value & 0xff) + "." + ((value >> 8) & 0xff) + "." +
+                ((value >> 16) & 0xff) + "." + ((value >> 24) & 0xff);
+    }
+
+    private boolean isValidIpv4(String ip) {
+        if (ip == null || !ip.matches("\\d{1,3}(?:\\.\\d{1,3}){3}")) return false;
+        String[] parts = ip.split("\\.");
+        for (String part : parts) {
+            try { int n = Integer.parseInt(part); if (n < 0 || n > 255) return false; }
+            catch (Exception e) { return false; }
+        }
+        return true;
     }
 
     private void captureAndSaveImage() {
@@ -308,7 +380,6 @@ public class MainActivity extends Activity {
             Bitmap bitmap = Bitmap.createBitmap(webView.getWidth(), webView.getHeight(), Bitmap.Config.ARGB_8888);
             Canvas canvas = new Canvas(bitmap);
             webView.draw(canvas);
-
             String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date());
             Paint background = new Paint(Paint.ANTI_ALIAS_FLAG);
             background.setColor(Color.argb(190, 0, 0, 0));
@@ -331,7 +402,7 @@ public class MainActivity extends Activity {
                 ContentValues values = new ContentValues();
                 values.put(MediaStore.Images.Media.DISPLAY_NAME, fileName);
                 values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
-                if (Build.VERSION.SDK_INT >= 29) {
+                if (android.os.Build.VERSION.SDK_INT >= 29) {
                     values.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Earth Monitor");
                     values.put(MediaStore.Images.Media.IS_PENDING, 1);
                     savedUri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
@@ -350,7 +421,7 @@ public class MainActivity extends Activity {
                 output.flush();
                 output.close();
                 output = null;
-                if (Build.VERSION.SDK_INT >= 29 && savedUri != null) {
+                if (android.os.Build.VERSION.SDK_INT >= 29 && savedUri != null) {
                     ContentValues done = new ContentValues();
                     done.put(MediaStore.Images.Media.IS_PENDING, 0);
                     getContentResolver().update(savedUri, done, null, null);
@@ -367,6 +438,13 @@ public class MainActivity extends Activity {
         }
     }
 
+    @Override protected void onDestroy() {
+        super.onDestroy();
+        if (distanceScheduler != null) distanceScheduler.shutdownNow();
+        if (scanExecutor != null) scanExecutor.shutdownNow();
+        if (webView != null) webView.destroy();
+    }
+
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQUEST_WRITE_STORAGE && grantResults.length > 0 &&
@@ -377,6 +455,24 @@ public class MainActivity extends Activity {
         }
     }
 
+    private TextView sectionTitle(String text) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextColor(Color.rgb(99,230,190));
+        view.setTextSize(12);
+        view.setPadding(0, dp(12), 0, dp(5));
+        return view;
+    }
+
+    private TextView smallText(String text) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextColor(Color.rgb(154,171,194));
+        view.setTextSize(12);
+        view.setPadding(0, dp(5), 0, dp(5));
+        return view;
+    }
+
     private Button makeButton(String text) {
         Button b = new Button(this);
         b.setText(text);
@@ -384,6 +480,7 @@ public class MainActivity extends Activity {
         b.setAllCaps(false);
         return b;
     }
+
     private int dp(int value) {
         return (int)(value * getResources().getDisplayMetrics().density + 0.5f);
     }
