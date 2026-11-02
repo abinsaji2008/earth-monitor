@@ -64,6 +64,7 @@ public class MainActivity extends Activity {
     private TextView scanStatus;
     private Spinner deviceSpinner;
     private Button scanButton;
+    private Button useSelectedButton;
     private ArrayAdapter<String> deviceAdapter;
     private SharedPreferences prefs;
     private String selectedIp = DEFAULT_IP;
@@ -132,9 +133,9 @@ public class MainActivity extends Activity {
         controls.addView(deviceSpinner, new LinearLayout.LayoutParams(-1, dp(44)));
         deviceSpinner.setVisibility(View.GONE);
 
-        Button useSelected = makeButton("Use Selected IP");
-        controls.addView(useSelected, new LinearLayout.LayoutParams(-1, dp(42)));
-        useSelected.setVisibility(View.GONE);
+        useSelectedButton = makeButton("Use Selected IP");
+        controls.addView(useSelectedButton, new LinearLayout.LayoutParams(-1, dp(42)));
+        useSelectedButton.setVisibility(View.GONE);
 
         TextView distanceTitle = sectionTitle("ULTRASONIC DISTANCE");
         controls.addView(distanceTitle);
@@ -192,7 +193,7 @@ public class MainActivity extends Activity {
             return false;
         });
         scan.setOnClickListener(v -> scanLocalNetwork());
-        useSelected.setOnClickListener(v -> {
+        useSelectedButton.setOnClickListener(v -> {
             Object item = deviceSpinner.getSelectedItem();
             if (item != null) {
                 String value = item.toString();
@@ -339,7 +340,7 @@ public class MainActivity extends Activity {
                 deviceAdapter.notifyDataSetChanged();
                 boolean hasResults = !found.isEmpty();
                 deviceSpinner.setVisibility(hasResults ? View.VISIBLE : View.GONE);
-                useSelected.setVisibility(hasResults ? View.VISIBLE : View.GONE);
+                useSelectedButton.setVisibility(hasResults ? View.VISIBLE : View.GONE);
                 scanStatus.setText(hasResults
                         ? "Found " + found.size() + " device(s) with an HTTP service. Select one below."
                         : "No HTTP devices found. You can still enter the ESP32 IP manually.");
