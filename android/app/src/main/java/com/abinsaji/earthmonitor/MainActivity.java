@@ -63,6 +63,7 @@ public class MainActivity extends Activity {
     private TextView distanceValue;
     private TextView scanStatus;
     private Spinner deviceSpinner;
+    private Button scanButton;
     private ArrayAdapter<String> deviceAdapter;
     private SharedPreferences prefs;
     private String selectedIp = DEFAULT_IP;
@@ -116,6 +117,7 @@ public class MainActivity extends Activity {
         connectionButtons.setOrientation(LinearLayout.HORIZONTAL);
         Button connect = makeButton("Connect");
         Button scan = makeButton("Scan Local Network");
+        scanButton = scan;
         connectionButtons.addView(connect, new LinearLayout.LayoutParams(0, dp(44), 1));
         connectionButtons.addView(scan, new LinearLayout.LayoutParams(0, dp(44), 1));
         controls.addView(connectionButtons);
@@ -308,7 +310,7 @@ public class MainActivity extends Activity {
         }
         scanning = true;
         scanStatus.setText("Scanning local network… This may take a few seconds.");
-        scan.setEnabled(false);
+        scanButton.setEnabled(false);
         if (scanExecutor != null) scanExecutor.shutdownNow();
         scanExecutor = Executors.newFixedThreadPool(32);
         List<String> found = java.util.Collections.synchronizedList(new ArrayList<>());
@@ -331,7 +333,7 @@ public class MainActivity extends Activity {
             scanExecutor.shutdownNow();
             runOnUiThread(() -> {
                 scanning = false;
-                scan.setEnabled(true);
+                scanButton.setEnabled(true);
                 deviceAdapter.clear();
                 deviceAdapter.addAll(found);
                 deviceAdapter.notifyDataSetChanged();
